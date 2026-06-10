@@ -291,10 +291,12 @@ const F  = memo(({label:l, children}) => <div><label>{l}</label>{children}</div>
 const AddTaskModal = memo(({onClose, onAdd, tasks}) => {
   const ET = {id:"",title:"",category:CATEGORIES[0],assignee:DIRECTORS[0],priority:"Medium",status:"To Do",due:"",notes:"",progress:0,subtasks:[],blockedBy:[],comments:[],recur:"None"};
   const [t, setT] = useState(ET);
+  const titleRef = useRef(null);
+  useEffect(()=>{ setTimeout(()=>{ if(titleRef.current) titleRef.current.focus(); }, 100); }, []);
   const submit = () => { if(!t.title.trim()) return; onAdd({...t, id:uid()}); };
   return (
     <Modal title="New Task" onClose={onClose} footer={<><button className="btn bp" style={{flex:1}} onClick={submit}>Create Task</button><button className="btn bg" onClick={onClose}>Cancel</button></>}>
-      <Field label="Title"><input className="inp" autoFocus value={t.title} onChange={e=>setT(p=>({...p,title:e.target.value}))} placeholder="Task title…"/></Field>
+      <Field label="Title"><input ref={titleRef} className="inp" value={t.title} onChange={e=>setT(p=>({...p,title:e.target.value}))} placeholder="Task title…"/></Field>
       <G2>
         <Field label="Assign To"><select className="sel" value={t.assignee} onChange={e=>setT(p=>({...p,assignee:e.target.value}))}>{DIRECTORS.map(d=><option key={d}>{d}</option>)}</select></Field>
         <Field label="Category"><select className="sel" value={t.category} onChange={e=>setT(p=>({...p,category:e.target.value}))}>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></Field>
@@ -313,7 +315,7 @@ const AddConfModal = memo(({onClose, onAdd}) => {
   const submit = () => { if(!t.title.trim()) return; onAdd({...t, id:uid(), done:false}); };
   return (
     <Modal title="Add Conference Item" onClose={onClose} footer={<><button className="btn bp" style={{flex:1}} onClick={submit}>Add</button><button className="btn bg" onClick={onClose}>Cancel</button></>}>
-      <Field label="Task"><input className="inp" autoFocus value={t.title} onChange={e=>setT(p=>({...p,title:e.target.value}))} placeholder="e.g. Book photographer"/></Field>
+      <Field label="Task"><input className="inp" value={t.title} onChange={e=>setT(p=>({...p,title:e.target.value}))} placeholder="e.g. Book photographer"/></Field>
       <G2>
         <Field label="Assign To"><select className="sel" value={t.assignee} onChange={e=>setT(p=>({...p,assignee:e.target.value}))}>{DIRECTORS.map(d=><option key={d}>{d}</option>)}</select></Field>
         <Field label="Due Date"><input type="date" className="inp" value={t.due} onChange={e=>setT(p=>({...p,due:e.target.value}))}/></Field>
@@ -330,7 +332,7 @@ const AddInvModal = memo(({onClose, onAdd, count}) => {
   };
   return (
     <Modal title="📤 New Invoice" onClose={onClose} footer={<><button className="btn bp" style={{flex:1}} onClick={submit}>Create Invoice</button><button className="btn bg" onClick={onClose}>Cancel</button></>}>
-      <Field label="Client"><input className="inp" autoFocus value={t.client} onChange={e=>setT(p=>({...p,client:e.target.value}))} placeholder="Client name"/></Field>
+      <Field label="Client"><input className="inp" value={t.client} onChange={e=>setT(p=>({...p,client:e.target.value}))} placeholder="Client name"/></Field>
       <Field label="Description"><input className="inp" value={t.description} onChange={e=>setT(p=>({...p,description:e.target.value}))} placeholder="Services rendered"/></Field>
       <G2>
         <Field label="Amount (£)"><input type="number" className="inp" value={t.amount} onChange={e=>setT(p=>({...p,amount:e.target.value}))} placeholder="0.00"/></Field>
@@ -351,7 +353,7 @@ const AddPayModal = memo(({onClose, onAdd, count}) => {
   };
   return (
     <Modal title="💸 New Payment" onClose={onClose} footer={<><button className="btn bp" style={{flex:1}} onClick={submit}>Add Payment</button><button className="btn bg" onClick={onClose}>Cancel</button></>}>
-      <Field label="Payee"><input className="inp" autoFocus value={t.payee} onChange={e=>setT(p=>({...p,payee:e.target.value}))} placeholder="Supplier / vendor"/></Field>
+      <Field label="Payee"><input className="inp" value={t.payee} onChange={e=>setT(p=>({...p,payee:e.target.value}))} placeholder="Supplier / vendor"/></Field>
       <Field label="Description"><input className="inp" value={t.description} onChange={e=>setT(p=>({...p,description:e.target.value}))} placeholder="What is this payment for?"/></Field>
       <G2>
         <Field label="Amount (£)"><input type="number" className="inp" value={t.amount} onChange={e=>setT(p=>({...p,amount:e.target.value}))} placeholder="0.00"/></Field>
@@ -722,7 +724,7 @@ export default function App() {
         {/* ─ DASHBOARD ─ */}
         {view==="dashboard"&&<>
           <div style={{marginBottom:24}}>
-            <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:22,fontWeight:800,color:"#fff"}}>Welcome back, <span style={{color:B.gold}}>Shameek</span> 👋</h1>
+            <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:22,fontWeight:800,color:"#fff"}}>Welcome back <span style={{color:B.gold}}>👋</span></h1>
             <p style={{color:B.muted,fontSize:13,marginTop:3}}>Disruptive Smiles · {new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}</p>
           </div>
 
