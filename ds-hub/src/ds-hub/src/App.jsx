@@ -23,7 +23,7 @@ async function sendEmail(to, subject, body) {
   const wm = WORDMARK_B64;
   const html = `<!DOCTYPE html><html><body style="margin:0;background:#f4f4f4;font-family:Arial,sans-serif;"><table width="100%" cellpadding="0" cellspacing="0" style="padding:28px 0;"><tr><td align="center"><table width="560" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;overflow:hidden;"><tr><td style="background:#1C1C1C;padding:18px 24px;"><img src="data:image/jpeg;base64,${wm}" alt="DS" style="height:26px;filter:brightness(0) invert(1);"/><div style="font-size:9px;color:#888;letter-spacing:2px;margin-top:3px;">DIRECTOR HUB</div></td></tr><tr><td style="height:3px;background:linear-gradient(90deg,#F5A97F,#C8784A,transparent);"></td></tr><tr><td style="padding:20px 24px;">${body}</td></tr><tr><td style="padding:0 24px 20px;"><a href="${process.env.REACT_APP_HUB_URL||'#'}" style="display:inline-block;background:#F5A97F;color:#111;font-weight:700;font-size:13px;padding:10px 20px;border-radius:8px;text-decoration:none;">Open Director Hub →</a></td></tr><tr><td style="background:#f9f9f9;padding:12px 24px;border-top:1px solid #eee;"><p style="margin:0;font-size:10px;color:#aaa;">Automated — Disruptive Smiles Director Hub</p></td></tr></table></td></tr></table></body></html>`;
   try {
-    await fetch("/.netlify/functions/send-email", {
+    await fetch("/api/send-email", {
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({ to: toArr, subject, html }),
     });
@@ -92,24 +92,28 @@ function useData(table, seed) {
         return;
       }
       if (rows && rows.length > 0) {
-        // Data exists in Supabase — use it
+        // Data exists in Supabase — always use it (source of truth)
         const loaded = rows.map(r => ({...r.payload, id: r.id}));
         setData(loaded);
         localStorage.setItem(lsKey, JSON.stringify(loaded));
       } else {
-        // Only seed if we've never seeded this table before
-        const hasSeeded = localStorage.getItem(seededKey);
-        if (!hasSeeded) {
+        // Table is empty in Supabase
+        // Check if this is truly first run by looking at ALL tables
+        // Only seed tasks table on first run — finance starts empty
+        const isTasksTable = table === 'ds_tasks' || table === 'ds_conf';
+        const hasSeeded = localStorage.getItem('ds_global_seeded');
+        if (isTasksTable && !hasSeeded) {
           supabase.from(table).insert(seed.map(i => ({id:i.id, payload:i}))).then(({error:e}) => {
             if (!e) {
-              localStorage.setItem(seededKey, 'true');
+              if (table === 'ds_tasks') localStorage.setItem('ds_global_seeded', 'true');
               setData(seed);
               localStorage.setItem(lsKey, JSON.stringify(seed));
             }
           });
         } else {
-          // Table is empty and we've seeded before = user deleted everything
+          // Finance tables start empty — good!
           setData([]);
+          localStorage.setItem(lsKey, JSON.stringify([]));
         }
       }
       setLoaded(true);
@@ -292,11 +296,15 @@ const AddTaskModal = memo(({onClose, onAdd, tasks}) => {
   const ET = {id:"",title:"",category:CATEGORIES[0],assignee:DIRECTORS[0],priority:"Medium",status:"To Do",due:"",notes:"",progress:0,subtasks:[],blockedBy:[],comments:[],recur:"None"};
   const [t, setT] = useState(ET);
   const titleRef = useRef(null);
-  useEffect(()=>{ setTimeout(()=>{ if(titleRef.current) titleRef.current.focus(); }, 100); }, []);
-  const submit = () => { if(!t.title.trim()) return; onAdd({...t, id:uid()}); };
+  useEffect(()=>{ setTimeout(()=>{ if(titleRef.current) titleRef.current.focus(); }, 150); }, []);
+  const submit = () => {
+    const titleVal = titleRef.current?.value || t.title;
+    if(!titleVal.trim()) return;
+    onAdd({...t, title:titleVal, id:uid()});
+  };
   return (
     <Modal title="New Task" onClose={onClose} footer={<><button className="btn bp" style={{flex:1}} onClick={submit}>Create Task</button><button className="btn bg" onClick={onClose}>Cancel</button></>}>
-      <Field label="Title"><input ref={titleRef} className="inp" value={t.title} onChange={e=>setT(p=>({...p,title:e.target.value}))} placeholder="Task title…"/></Field>
+      <Field label="Title"><input ref={titleRef} className="inp" defaultValue="" onChange={e=>setT(p=>({...p,title:e.target.value}))} placeholder="Task title…"/></Field>
       <G2>
         <Field label="Assign To"><select className="sel" value={t.assignee} onChange={e=>setT(p=>({...p,assignee:e.target.value}))}>{DIRECTORS.map(d=><option key={d}>{d}</option>)}</select></Field>
         <Field label="Category"><select className="sel" value={t.category} onChange={e=>setT(p=>({...p,category:e.target.value}))}>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></Field>
@@ -518,15 +526,15 @@ export default function App() {
     input[type=range]{width:100%;accent-color:${B.gold};}
     input[type=checkbox]{accent-color:${B.gold};width:18px;height:18px;cursor:pointer;flex-shrink:0;}
     .dp{position:fixed;top:64px;right:0;bottom:0;width:460px;background:${B.surface};border-left:1px solid ${B.border};z-index:150;overflow-y:auto;padding:22px;box-shadow:-8px 0 32px #0007;}
-    .mob-nav{display:none;position:fixed;bottom:0;left:0;right:0;background:${B.surface};border-top:1px solid ${B.border};z-index:120;padding:0 4px;padding-bottom:env(safe-area-inset-bottom,0px);}
-    .mnb{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px 2px 6px;background:none;border:none;cursor:pointer;color:${B.muted};font-family:'DM Sans',sans-serif;font-size:9px;font-weight:600;letter-spacing:.03em;gap:2px;-webkit-tap-highlight-color:transparent;min-height:56px;}
+    .mob-nav{display:none;position:fixed;bottom:0;left:0;right:0;background:${B.surface};border-top:1px solid ${B.border};z-index:400;padding:0 4px;padding-bottom:env(safe-area-inset-bottom,0px);-webkit-transform:translateZ(0);transform:translateZ(0);}
+    .mnb{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px 2px 6px;background:none;border:none;cursor:pointer;color:${B.muted};font-family:'DM Sans',sans-serif;font-size:9px;font-weight:600;letter-spacing:.03em;gap:2px;-webkit-tap-highlight-color:transparent;min-height:56px;touch-action:manipulation;-webkit-touch-callout:none;}
     .mnb.act{color:${B.gold};}
     .mnb .i{font-size:22px;line-height:1;}
     .desk-nav{display:flex;gap:2px;flex-wrap:wrap;justify-content:flex-end;}
     @media(max-width:768px){
       .mob-nav{display:flex;}
       .desk-nav{display:none;}
-      .main-wrap{padding-bottom:72px !important;}
+      .main-wrap{padding-bottom:80px !important;}
       .header-inner{gap:8px !important;}
       .header-search{max-width:140px !important;}
       .sync-txt{display:none;}
