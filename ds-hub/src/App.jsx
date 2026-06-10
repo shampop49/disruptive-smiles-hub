@@ -64,44 +64,109 @@ const Notify = {
 
 function useData(table, seed) {
   const lsKey = `ds_${table}`;
+  const seededKey = `ds_seeded_${table}`;
+
+  // Always start from localStorage if available, otherwise empty
   const [data, setData] = useState(() => {
-    if (isSupabaseReady) return seed;
-    try { const s=localStorage.getItem(lsKey); return s?JSON.parse(s):seed; } catch { return seed; }
+    try { const s=localStorage.getItem(lsKey); return s?JSON.parse(s):[]; } catch { return []; }
   });
+  const [loaded, setLoaded] = useState(false);
+
+  // Load from Supabase on mount
   useEffect(() => {
-    if (!isSupabaseReady) return;
-    supabase.from(table).select("*").then(({data:rows,error}) => {
-      if (!error && rows) {
-        if (rows.length>0) setData(rows.map(r=>({...r.payload,id:r.id})));
-        else { supabase.from(table).insert(seed.map(i=>({id:i.id,payload:i}))).then(); setData(seed); }
+    if (!isSupabaseReady) {
+      // No Supabase — use localStorage with seed fallback
+      try {
+        const s = localStorage.getItem(lsKey);
+        setData(s ? JSON.parse(s) : seed);
+      } catch { setData(seed); }
+      setLoaded(true);
+      return;
+    }
+    supabase.from(table).select("*").then(({data:rows, error}) => {
+      if (error) {
+        console.error(`Supabase load error for ${table}:`, error);
+        // Fall back to localStorage
+        try { const s=localStorage.getItem(lsKey); setData(s?JSON.parse(s):seed); } catch { setData(seed); }
+        setLoaded(true);
+        return;
       }
+      if (rows && rows.length > 0) {
+        // Data exists in Supabase — use it
+        const loaded = rows.map(r => ({...r.payload, id: r.id}));
+        setData(loaded);
+        localStorage.setItem(lsKey, JSON.stringify(loaded));
+      } else {
+        // Only seed if we've never seeded this table before
+        const hasSeeded = localStorage.getItem(seededKey);
+        if (!hasSeeded) {
+          supabase.from(table).insert(seed.map(i => ({id:i.id, payload:i}))).then(({error:e}) => {
+            if (!e) {
+              localStorage.setItem(seededKey, 'true');
+              setData(seed);
+              localStorage.setItem(lsKey, JSON.stringify(seed));
+            }
+          });
+        } else {
+          // Table is empty and we've seeded before = user deleted everything
+          setData([]);
+        }
+      }
+      setLoaded(true);
     });
   }, []); // eslint-disable-line
+
+  // Real-time subscription
   useEffect(() => {
     if (!isSupabaseReady) return;
     const ch = supabase.channel(`rt_${table}`)
-      .on("postgres_changes",{event:"*",schema:"public",table},p=>{
-        setData(prev=>{
-          if(p.eventType==="INSERT"){ const i={...p.new.payload,id:p.new.id}; return prev.find(x=>x.id===i.id)?prev:[...prev,i]; }
-          if(p.eventType==="UPDATE") return prev.map(x=>x.id===p.new.id?{...p.new.payload,id:p.new.id}:x);
-          if(p.eventType==="DELETE") return prev.filter(x=>x.id!==p.old.id);
-          return prev;
+      .on("postgres_changes", {event:"*", schema:"public", table}, p => {
+        setData(prev => {
+          let next;
+          if (p.eventType==="INSERT") {
+            const item = {...p.new.payload, id:p.new.id};
+            next = prev.find(x=>x.id===item.id) ? prev : [...prev, item];
+          } else if (p.eventType==="UPDATE") {
+            next = prev.map(x => x.id===p.new.id ? {...p.new.payload, id:p.new.id} : x);
+          } else if (p.eventType==="DELETE") {
+            next = prev.filter(x => x.id!==p.old.id);
+          } else {
+            next = prev;
+          }
+          localStorage.setItem(lsKey, JSON.stringify(next));
+          return next;
         });
       }).subscribe();
-    return ()=>supabase.removeChannel(ch);
-  }, [table]);
-  useEffect(() => {
-    if (!isSupabaseReady) { try{localStorage.setItem(lsKey,JSON.stringify(data));}catch{} }
-  }, [data,lsKey]);
+    return () => supabase.removeChannel(ch);
+  }, [table, lsKey]);
+
   const upsert = useCallback(async item => {
-    setData(prev=>prev.find(x=>x.id===item.id)?prev.map(x=>x.id===item.id?item:x):[...prev,item]);
-    if (isSupabaseReady) await supabase.from(table).upsert({id:item.id,payload:item});
-  }, [table]);
+    setData(prev => {
+      const next = prev.find(x=>x.id===item.id)
+        ? prev.map(x=>x.id===item.id?item:x)
+        : [...prev, item];
+      localStorage.setItem(lsKey, JSON.stringify(next));
+      return next;
+    });
+    if (isSupabaseReady) {
+      const {error} = await supabase.from(table).upsert({id:item.id, payload:item});
+      if (error) console.error(`Supabase upsert error:`, error);
+    }
+  }, [table, lsKey]);
+
   const remove = useCallback(async id => {
-    setData(prev=>prev.filter(x=>x.id!==id));
-    if (isSupabaseReady) await supabase.from(table).delete().eq("id",id);
-  }, [table]);
-  return { data, upsert, remove };
+    setData(prev => {
+      const next = prev.filter(x=>x.id!==id);
+      localStorage.setItem(lsKey, JSON.stringify(next));
+      return next;
+    });
+    if (isSupabaseReady) {
+      const {error} = await supabase.from(table).delete().eq("id", id);
+      if (error) console.error(`Supabase delete error:`, error);
+    }
+  }, [table, lsKey]);
+
+  return { data, upsert, remove, loaded };
 }
 
 
