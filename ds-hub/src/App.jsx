@@ -23,7 +23,7 @@ async function sendEmail(to, subject, body) {
   const wm = WORDMARK_B64;
   const html = `<!DOCTYPE html><html><body style="margin:0;background:#f4f4f4;font-family:Arial,sans-serif;"><table width="100%" cellpadding="0" cellspacing="0" style="padding:28px 0;"><tr><td align="center"><table width="560" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;overflow:hidden;"><tr><td style="background:#1C1C1C;padding:18px 24px;"><img src="data:image/jpeg;base64,${wm}" alt="DS" style="height:26px;filter:brightness(0) invert(1);"/><div style="font-size:9px;color:#888;letter-spacing:2px;margin-top:3px;">DIRECTOR HUB</div></td></tr><tr><td style="height:3px;background:linear-gradient(90deg,#F5A97F,#C8784A,transparent);"></td></tr><tr><td style="padding:20px 24px;">${body}</td></tr><tr><td style="padding:0 24px 20px;"><a href="${process.env.REACT_APP_HUB_URL||'#'}" style="display:inline-block;background:#F5A97F;color:#111;font-weight:700;font-size:13px;padding:10px 20px;border-radius:8px;text-decoration:none;">Open Director Hub →</a></td></tr><tr><td style="background:#f9f9f9;padding:12px 24px;border-top:1px solid #eee;"><p style="margin:0;font-size:10px;color:#aaa;">Automated — Disruptive Smiles Director Hub</p></td></tr></table></td></tr></table></body></html>`;
   try {
-    await fetch("/.netlify/functions/send-email", {
+    await fetch("/api/send-email", {
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({ to: toArr, subject, html }),
     });
@@ -92,24 +92,28 @@ function useData(table, seed) {
         return;
       }
       if (rows && rows.length > 0) {
-        // Data exists in Supabase — use it
+        // Data exists in Supabase — always use it (source of truth)
         const loaded = rows.map(r => ({...r.payload, id: r.id}));
         setData(loaded);
         localStorage.setItem(lsKey, JSON.stringify(loaded));
       } else {
-        // Only seed if we've never seeded this table before
-        const hasSeeded = localStorage.getItem(seededKey);
-        if (!hasSeeded) {
+        // Table is empty in Supabase
+        // Check if this is truly first run by looking at ALL tables
+        // Only seed tasks table on first run — finance starts empty
+        const isTasksTable = table === 'ds_tasks' || table === 'ds_conf';
+        const hasSeeded = localStorage.getItem('ds_global_seeded');
+        if (isTasksTable && !hasSeeded) {
           supabase.from(table).insert(seed.map(i => ({id:i.id, payload:i}))).then(({error:e}) => {
             if (!e) {
-              localStorage.setItem(seededKey, 'true');
+              if (table === 'ds_tasks') localStorage.setItem('ds_global_seeded', 'true');
               setData(seed);
               localStorage.setItem(lsKey, JSON.stringify(seed));
             }
           });
         } else {
-          // Table is empty and we've seeded before = user deleted everything
+          // Finance tables start empty — good!
           setData([]);
+          localStorage.setItem(lsKey, JSON.stringify([]));
         }
       }
       setLoaded(true);
@@ -244,6 +248,33 @@ const ProgressBar = ({pct,color=B.gold})=>(
 
 // ── MAIN APP ───────────────────────────────────────────────────────────
 // ── Standalone components (defined outside App to prevent focus loss on re-render) ──
+const SyncStatus = () => {
+  const [status, setStatus] = React.useState("checking");
+  React.useEffect(() => {
+    if (!isSupabaseReady) { setStatus("no-config"); return; }
+    // Test actual connection
+    supabase.from("ds_tasks").select("id", {count:"exact",head:true})
+      .then(({error}) => {
+        if (error) { console.error("Supabase test error:", error); setStatus("error"); }
+        else setStatus("connected");
+      });
+  }, []);
+  const configs = {
+    checking:    {color:"#f59e0b", dot:"#f59e0b", text:"Connecting..."},
+    connected:   {color:"#10b981", dot:"#10b981", text:"Live sync"},
+    error:       {color:"#ef4444", dot:"#ef4444", text:"Sync error"},
+    "no-config": {color:"#f59e0b", dot:"#f59e0b", text:"Local mode"},
+  };
+  const c = configs[status] || configs.checking;
+  return (
+    <div style={{fontSize:11,color:c.color,flexShrink:0,display:"flex",alignItems:"center",gap:5,cursor:"pointer"}}
+      title={`Status: ${status}`}>
+      <span style={{width:7,height:7,borderRadius:"50%",background:c.dot,display:"inline-block"}}/>
+      <span className="sync-txt">{c.text}</span>
+    </div>
+  );
+};
+
 const Modal = memo(({title, onClose, children, footer}) => (
   <div className="ov" onClick={onClose}>
     <div className="mod" onClick={e=>e.stopPropagation()}>
@@ -259,11 +290,115 @@ const Modal = memo(({title, onClose, children, footer}) => (
 const G2 = memo(({children}) => <div className="form-g2" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11}}>{children}</div>);
 const F  = memo(({label:l, children}) => <div><label>{l}</label>{children}</div>);
 
+// ── Standalone Modal Forms (own local state = no focus loss while typing) ──
+
+const AddTaskModal = memo(({onClose, onAdd}) => {
+  // Use refs for ALL inputs so iOS keyboard never dismisses
+  const titleRef    = useRef(null);
+  const notesRef    = useRef(null);
+  const assigneeRef = useRef(null);
+  const categoryRef = useRef(null);
+  const priorityRef = useRef(null);
+  const statusRef   = useRef(null);
+  const dueRef      = useRef(null);
+  const recurRef    = useRef(null);
+
+  useEffect(()=>{ setTimeout(()=>{ if(titleRef.current) titleRef.current.focus(); }, 200); }, []);
+
+  const submit = () => {
+    const title = titleRef.current?.value || "";
+    if(!title.trim()) return;
+    onAdd({
+      id: uid(),
+      title,
+      assignee: assigneeRef.current?.value || DIRECTORS[0],
+      category: categoryRef.current?.value || CATEGORIES[0],
+      priority: priorityRef.current?.value || "Medium",
+      status:   statusRef.current?.value   || "To Do",
+      due:      dueRef.current?.value      || "",
+      recur:    recurRef.current?.value    || "None",
+      notes:    notesRef.current?.value    || "",
+      progress: 0, subtasks: [], blockedBy: [], comments: [],
+    });
+  };
+
+  return (
+    <Modal title="New Task" onClose={onClose} footer={<><button className="btn bp" style={{flex:1}} onClick={submit}>Create Task</button><button className="btn bg" onClick={onClose}>Cancel</button></>}>
+      <Field label="Title"><input ref={titleRef} className="inp" placeholder="Task title…"/></Field>
+      <G2>
+        <Field label="Assign To"><select ref={assigneeRef} className="sel">{DIRECTORS.map(d=><option key={d}>{d}</option>)}</select></Field>
+        <Field label="Category"><select ref={categoryRef} className="sel">{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></Field>
+        <Field label="Priority"><select ref={priorityRef} className="sel">{PRIORITIES.map(p=><option key={p}>{p}</option>)}</select></Field>
+        <Field label="Status"><select ref={statusRef} className="sel">{STATUS_OPTIONS.map(s=><option key={s}>{s}</option>)}</select></Field>
+        <Field label="Due Date"><input ref={dueRef} type="date" className="inp"/></Field>
+        <Field label="Recurring"><select ref={recurRef} className="sel">{RECUR_OPTIONS.map(r=><option key={r}>{r}</option>)}</select></Field>
+      </G2>
+      <Field label="Notes"><textarea ref={notesRef} className="inp" rows={2} style={{resize:"vertical"}} placeholder="Optional notes…"/></Field>
+    </Modal>
+  );
+});
+
+const AddConfModal = memo(({onClose, onAdd}) => {
+  const [t, setT] = useState({title:"", assignee:DIRECTORS[0], due:""});
+  const submit = () => { if(!t.title.trim()) return; onAdd({...t, id:uid(), done:false}); };
+  return (
+    <Modal title="Add Conference Item" onClose={onClose} footer={<><button className="btn bp" style={{flex:1}} onClick={submit}>Add</button><button className="btn bg" onClick={onClose}>Cancel</button></>}>
+      <Field label="Task"><input className="inp" value={t.title} onChange={e=>setT(p=>({...p,title:e.target.value}))} placeholder="e.g. Book photographer"/></Field>
+      <G2>
+        <Field label="Assign To"><select className="sel" value={t.assignee} onChange={e=>setT(p=>({...p,assignee:e.target.value}))}>{DIRECTORS.map(d=><option key={d}>{d}</option>)}</select></Field>
+        <Field label="Due Date"><input type="date" className="inp" value={t.due} onChange={e=>setT(p=>({...p,due:e.target.value}))}/></Field>
+      </G2>
+    </Modal>
+  );
+});
+
+const AddInvModal = memo(({onClose, onAdd, count}) => {
+  const [t, setT] = useState({client:"",description:"",amount:"",issued:"",due:"",status:"Draft",assignee:DIRECTORS[0]});
+  const submit = () => {
+    if(!t.client.trim()) return;
+    onAdd({...t, id:`INV-${String(count+1).padStart(3,"0")}`, amount:parseFloat(t.amount)||0});
+  };
+  return (
+    <Modal title="📤 New Invoice" onClose={onClose} footer={<><button className="btn bp" style={{flex:1}} onClick={submit}>Create Invoice</button><button className="btn bg" onClick={onClose}>Cancel</button></>}>
+      <Field label="Client"><input className="inp" value={t.client} onChange={e=>setT(p=>({...p,client:e.target.value}))} placeholder="Client name"/></Field>
+      <Field label="Description"><input className="inp" value={t.description} onChange={e=>setT(p=>({...p,description:e.target.value}))} placeholder="Services rendered"/></Field>
+      <G2>
+        <Field label="Amount (£)"><input type="number" className="inp" value={t.amount} onChange={e=>setT(p=>({...p,amount:e.target.value}))} placeholder="0.00"/></Field>
+        <Field label="Status"><select className="sel" value={t.status} onChange={e=>setT(p=>({...p,status:e.target.value}))}>{INV_STATUSES.map(s=><option key={s}>{s}</option>)}</select></Field>
+        <Field label="Issue Date"><input type="date" className="inp" value={t.issued} onChange={e=>setT(p=>({...p,issued:e.target.value}))}/></Field>
+        <Field label="Due Date"><input type="date" className="inp" value={t.due} onChange={e=>setT(p=>({...p,due:e.target.value}))}/></Field>
+        <Field label="Managed By"><select className="sel" value={t.assignee} onChange={e=>setT(p=>({...p,assignee:e.target.value}))}>{DIRECTORS.map(d=><option key={d}>{d}</option>)}</select></Field>
+      </G2>
+    </Modal>
+  );
+});
+
+const AddPayModal = memo(({onClose, onAdd, count}) => {
+  const [t, setT] = useState({payee:"",description:"",amount:"",due:"",status:"Pending",assignee:DIRECTORS[0],category:"Stock"});
+  const submit = () => {
+    if(!t.payee.trim()) return;
+    onAdd({...t, id:`PAY-${String(count+1).padStart(3,"0")}`, amount:parseFloat(t.amount)||0});
+  };
+  return (
+    <Modal title="💸 New Payment" onClose={onClose} footer={<><button className="btn bp" style={{flex:1}} onClick={submit}>Add Payment</button><button className="btn bg" onClick={onClose}>Cancel</button></>}>
+      <Field label="Payee"><input className="inp" value={t.payee} onChange={e=>setT(p=>({...p,payee:e.target.value}))} placeholder="Supplier / vendor"/></Field>
+      <Field label="Description"><input className="inp" value={t.description} onChange={e=>setT(p=>({...p,description:e.target.value}))} placeholder="What is this payment for?"/></Field>
+      <G2>
+        <Field label="Amount (£)"><input type="number" className="inp" value={t.amount} onChange={e=>setT(p=>({...p,amount:e.target.value}))} placeholder="0.00"/></Field>
+        <Field label="Due Date"><input type="date" className="inp" value={t.due} onChange={e=>setT(p=>({...p,due:e.target.value}))}/></Field>
+        <Field label="Status"><select className="sel" value={t.status} onChange={e=>setT(p=>({...p,status:e.target.value}))}>{PAY_STATUSES.map(s=><option key={s}>{s}</option>)}</select></Field>
+        <Field label="Category"><select className="sel" value={t.category} onChange={e=>setT(p=>({...p,category:e.target.value}))}>{PAY_CATS.map(c=><option key={c}>{c}</option>)}</select></Field>
+        <Field label="Assigned To"><select className="sel" value={t.assignee} onChange={e=>setT(p=>({...p,assignee:e.target.value}))}>{DIRECTORS.map(d=><option key={d}>{d}</option>)}</select></Field>
+      </G2>
+    </Modal>
+  );
+});
+
 export default function App() {
   const {data:tasks,    upsert:upsertTask, remove:removeTask}  = useData("ds_tasks",    SEED_TASKS);
-  const {data:conf,     upsert:upsertConf, remove:removeConf}  = useData("ds_conf",     SEED_CONF);
-  const {data:invoices, upsert:upsertInv,  remove:removeInv}   = useData("ds_invoices", SEED_INV);
-  const {data:payments, upsert:upsertPay,  remove:removePay}   = useData("ds_payments", SEED_PAY);
+  const {data:conf,     upsert:upsertConf, remove:removeConf}  = useData("ds_conf",     []);
+  const {data:invoices, upsert:upsertInv,  remove:removeInv}   = useData("ds_invoices", []);
+  const {data:payments, upsert:upsertPay,  remove:removePay}   = useData("ds_payments", []);
 
   const [view,        setView]        = useState("dashboard");
   const [finTab,      setFinTab]      = useState("invoices");
@@ -411,15 +546,15 @@ export default function App() {
     input[type=range]{width:100%;accent-color:${B.gold};}
     input[type=checkbox]{accent-color:${B.gold};width:18px;height:18px;cursor:pointer;flex-shrink:0;}
     .dp{position:fixed;top:64px;right:0;bottom:0;width:460px;background:${B.surface};border-left:1px solid ${B.border};z-index:150;overflow-y:auto;padding:22px;box-shadow:-8px 0 32px #0007;}
-    .mob-nav{display:none;position:fixed;bottom:0;left:0;right:0;background:${B.surface};border-top:1px solid ${B.border};z-index:120;padding:0 4px;padding-bottom:env(safe-area-inset-bottom,0px);}
-    .mnb{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px 2px 6px;background:none;border:none;cursor:pointer;color:${B.muted};font-family:'DM Sans',sans-serif;font-size:9px;font-weight:600;letter-spacing:.03em;gap:2px;-webkit-tap-highlight-color:transparent;min-height:56px;}
+    .mob-nav{display:none;position:fixed;bottom:0;left:0;right:0;background:${B.surface};border-top:1px solid ${B.border};z-index:400;padding:0 4px;padding-bottom:env(safe-area-inset-bottom,0px);-webkit-transform:translateZ(0);transform:translateZ(0);}
+    .mnb{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px 2px 6px;background:none;border:none;cursor:pointer;color:${B.muted};font-family:'DM Sans',sans-serif;font-size:9px;font-weight:600;letter-spacing:.03em;gap:2px;-webkit-tap-highlight-color:transparent;min-height:56px;touch-action:manipulation;-webkit-touch-callout:none;}
     .mnb.act{color:${B.gold};}
     .mnb .i{font-size:22px;line-height:1;}
     .desk-nav{display:flex;gap:2px;flex-wrap:wrap;justify-content:flex-end;}
     @media(max-width:768px){
       .mob-nav{display:flex;}
       .desk-nav{display:none;}
-      .main-wrap{padding-bottom:72px !important;}
+      .main-wrap{padding-bottom:80px !important;}
       .header-inner{gap:8px !important;}
       .header-search{max-width:140px !important;}
       .sync-txt{display:none;}
@@ -598,6 +733,9 @@ export default function App() {
             )}
           </div>
 
+          {/* Sync status */}
+          <SyncStatus/>
+
           {/* Nav */}
           <nav style={{display:"flex",gap:2,flexWrap:"wrap"}}>
             {[["dashboard","📊"],["tasks","✅ Tasks"],["kanban","📋 Board"],["workload","👥 Workload"],["conference","🎤 Conference"],["finance","💷 Finance"]].map(([v,l])=>(
@@ -614,7 +752,7 @@ export default function App() {
         {/* ─ DASHBOARD ─ */}
         {view==="dashboard"&&<>
           <div style={{marginBottom:24}}>
-            <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:22,fontWeight:800,color:"#fff"}}>Welcome back, <span style={{color:B.gold}}>Shameek</span> 👋</h1>
+            <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:22,fontWeight:800,color:"#fff"}}>Welcome back <span style={{color:B.gold}}>👋</span></h1>
             <p style={{color:B.muted,fontSize:13,marginTop:3}}>Disruptive Smiles · {new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}</p>
           </div>
 
@@ -909,44 +1047,17 @@ export default function App() {
 
       {/* Add Task */}
       {showTask&&(
-        <Modal title="New Task" onClose={()=>setShowTask(false)} footer={<><button className="btn bp" style={{flex:1}} onClick={addTask}>Create Task</button><button className="btn bg" onClick={()=>setShowTask(false)}>Cancel</button></>}>
-          <Field label="Title"><input className="inp" value={newTask.title} onChange={e=>setNewTask({...newTask,title:e.target.value})} placeholder="Task title…"/></Field>
-          <G2>
-            <Field label="Assign To"><select className="sel" value={newTask.assignee} onChange={e=>setNewTask({...newTask,assignee:e.target.value})}>{DIRECTORS.map(d=><option key={d}>{d}</option>)}</select></Field>
-            <Field label="Category"><select className="sel" value={newTask.category} onChange={e=>setNewTask({...newTask,category:e.target.value})}>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></Field>
-            <Field label="Priority"><select className="sel" value={newTask.priority} onChange={e=>setNewTask({...newTask,priority:e.target.value})}>{PRIORITIES.map(p=><option key={p}>{p}</option>)}</select></Field>
-            <Field label="Status"><select className="sel" value={newTask.status} onChange={e=>setNewTask({...newTask,status:e.target.value})}>{STATUS_OPTIONS.map(s=><option key={s}>{s}</option>)}</select></Field>
-            <Field label="Due Date"><input type="date" className="inp" value={newTask.due} onChange={e=>setNewTask({...newTask,due:e.target.value})}/></Field>
-            <Field label="Recurring"><select className="sel" value={newTask.recur} onChange={e=>setNewTask({...newTask,recur:e.target.value})}>{RECUR_OPTIONS.map(r=><option key={r}>{r}</option>)}</select></Field>
-          </G2>
-          <Field label="Notes"><textarea className="inp" rows={2} value={newTask.notes} onChange={e=>setNewTask({...newTask,notes:e.target.value})} style={{resize:"vertical"}}/></Field>
-        </Modal>
+        <AddTaskModal onClose={()=>setShowTask(false)} onAdd={t=>{upsertTask(t);Notify.assigned(t,"Shameek Popat");setShowTask(false);}} tasks={tasks}/>
       )}
 
       {/* Add Conf */}
       {showConf&&(
-        <Modal title="Add Conference Item" onClose={()=>setShowConf(false)} footer={<><button className="btn bp" style={{flex:1}} onClick={addConf}>Add</button><button className="btn bg" onClick={()=>setShowConf(false)}>Cancel</button></>}>
-          <Field label="Task"><input className="inp" value={newConf.title} onChange={e=>setNewConf({...newConf,title:e.target.value})} placeholder="e.g. Book photographer"/></Field>
-          <G2>
-            <Field label="Assign To"><select className="sel" value={newConf.assignee} onChange={e=>setNewConf({...newConf,assignee:e.target.value})}>{DIRECTORS.map(d=><option key={d}>{d}</option>)}</select></Field>
-            <Field label="Due Date"><input type="date" className="inp" value={newConf.due} onChange={e=>setNewConf({...newConf,due:e.target.value})}/></Field>
-          </G2>
-        </Modal>
+        <AddConfModal onClose={()=>setShowConf(false)} onAdd={c=>{upsertConf(c);setShowConf(false);}}/>
       )}
 
       {/* Add Invoice */}
       {showInv&&(
-        <Modal title="📤 New Invoice" onClose={()=>setShowInv(false)} footer={<><button className="btn bp" style={{flex:1}} onClick={addInv}>Create Invoice</button><button className="btn bg" onClick={()=>setShowInv(false)}>Cancel</button></>}>
-          <Field label="Client"><input className="inp" value={newInv.client} onChange={e=>setNewInv({...newInv,client:e.target.value})} placeholder="Client name"/></Field>
-          <Field label="Description"><input className="inp" value={newInv.description} onChange={e=>setNewInv({...newInv,description:e.target.value})} placeholder="Services rendered"/></Field>
-          <G2>
-            <Field label="Amount (£)"><input type="number" className="inp" value={newInv.amount} onChange={e=>setNewInv({...newInv,amount:e.target.value})} placeholder="0.00"/></Field>
-            <Field label="Status"><select className="sel" value={newInv.status} onChange={e=>setNewInv({...newInv,status:e.target.value})}>{INV_STATUSES.map(s=><option key={s}>{s}</option>)}</select></Field>
-            <Field label="Issue Date"><input type="date" className="inp" value={newInv.issued} onChange={e=>setNewInv({...newInv,issued:e.target.value})}/></Field>
-            <Field label="Due Date"><input type="date" className="inp" value={newInv.due} onChange={e=>setNewInv({...newInv,due:e.target.value})}/></Field>
-            <Field label="Managed By"><select className="sel" value={newInv.assignee} onChange={e=>setNewInv({...newInv,assignee:e.target.value})}>{DIRECTORS.map(d=><option key={d}>{d}</option>)}</select></Field>
-          </G2>
-        </Modal>
+        <AddInvModal onClose={()=>setShowInv(false)} onAdd={i=>{upsertInv(i);setShowInv(false);}} count={invoices.length}/>
       )}
 
       {/* Edit Invoice */}
@@ -966,17 +1077,7 @@ export default function App() {
 
       {/* Add Payment */}
       {showPay&&(
-        <Modal title="💸 New Payment" onClose={()=>setShowPay(false)} footer={<><button className="btn bp" style={{flex:1}} onClick={addPay}>Add Payment</button><button className="btn bg" onClick={()=>setShowPay(false)}>Cancel</button></>}>
-          <Field label="Payee"><input className="inp" value={newPay.payee} onChange={e=>setNewPay({...newPay,payee:e.target.value})} placeholder="Supplier / vendor name"/></Field>
-          <Field label="Description"><input className="inp" value={newPay.description} onChange={e=>setNewPay({...newPay,description:e.target.value})} placeholder="What is this payment for?"/></Field>
-          <G2>
-            <Field label="Amount (£)"><input type="number" className="inp" value={newPay.amount} onChange={e=>setNewPay({...newPay,amount:e.target.value})} placeholder="0.00"/></Field>
-            <Field label="Due Date"><input type="date" className="inp" value={newPay.due} onChange={e=>setNewPay({...newPay,due:e.target.value})}/></Field>
-            <Field label="Status"><select className="sel" value={newPay.status} onChange={e=>setNewPay({...newPay,status:e.target.value})}>{PAY_STATUSES.map(s=><option key={s}>{s}</option>)}</select></Field>
-            <Field label="Category"><select className="sel" value={newPay.category} onChange={e=>setNewPay({...newPay,category:e.target.value})}>{PAY_CATS.map(c=><option key={c}>{c}</option>)}</select></Field>
-            <Field label="Assigned To"><select className="sel" value={newPay.assignee} onChange={e=>setNewPay({...newPay,assignee:e.target.value})}>{DIRECTORS.map(d=><option key={d}>{d}</option>)}</select></Field>
-          </G2>
-        </Modal>
+        <AddPayModal onClose={()=>setShowPay(false)} onAdd={p=>{upsertPay(p);setShowPay(false);}} count={payments.length}/>
       )}
 
       {/* Edit Payment */}
