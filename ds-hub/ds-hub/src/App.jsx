@@ -248,6 +248,8 @@ const ProgressBar = ({pct,color=B.gold})=>(
 
 // ── MAIN APP ───────────────────────────────────────────────────────────
 // ── Standalone components (defined outside App to prevent focus loss on re-render) ──
+const Field = ({label:l, children}) => <div><label>{l}</label>{children}</div>;
+
 const SyncStatus = () => {
   const [status, setStatus] = React.useState("checking");
   React.useEffect(() => {
@@ -291,8 +293,6 @@ const G2 = memo(({children}) => <div className="form-g2" style={{display:"grid",
 const F  = memo(({label:l, children}) => <div><label>{l}</label>{children}</div>);
 
 // ── Standalone Modal Forms (own local state = no focus loss while typing) ──
-
-const Field = ({label:l, children}) => <div><label>{l}</label>{children}</div>;
 
 const AddTaskModal = memo(({onClose, onAdd}) => {
   // Use refs for ALL inputs so iOS keyboard never dismisses
