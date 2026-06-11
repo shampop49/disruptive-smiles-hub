@@ -292,6 +292,8 @@ const F  = memo(({label:l, children}) => <div><label>{l}</label>{children}</div>
 
 // ── Standalone Modal Forms (own local state = no focus loss while typing) ──
 
+const Field = ({label:l, children}) => <div><label>{l}</label>{children}</div>;
+
 const AddTaskModal = memo(({onClose, onAdd}) => {
   // Use refs for ALL inputs so iOS keyboard never dismisses
   const titleRef    = useRef(null);
@@ -576,8 +578,6 @@ export default function App() {
   `;
 
   // Modal/G2/F defined outside App component (above) to prevent re-render focus loss
-  const Field=({label:l,children})=><div><label>{l}</label>{children}</div>;
-
   // ── Task Detail Panel ─────────────────────────────────────────────
   const TaskDetail=()=>{
     const [t,setT]=useState(detailTask);
